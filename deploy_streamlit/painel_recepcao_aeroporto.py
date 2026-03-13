@@ -19,6 +19,10 @@ def carregar_dados():
     # Configurar credenciais
     credentials_dict = dict(st.secrets["gcp_service_account"])
     
+    # Corrigir formatação da private_key (problema comum no Streamlit Cloud)
+    if "private_key" in credentials_dict:
+        credentials_dict["private_key"] = credentials_dict["private_key"].replace("\\n", "\n")
+    
     scopes = [
         'https://www.googleapis.com/auth/spreadsheets.readonly',
         'https://www.googleapis.com/auth/drive.readonly'
