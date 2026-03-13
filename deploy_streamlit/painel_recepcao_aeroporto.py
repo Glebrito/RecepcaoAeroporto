@@ -4,6 +4,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import numpy as np
+import os
 
 st.set_page_config(page_title="Gestão Recepção Aeroporto", layout="wide", page_icon="✈️")
 
@@ -12,9 +13,19 @@ st.title("✈️ Análise de Recepção no Aeroporto - Clientes sem Guia")
 st.markdown("---")
 
 @st.cache_data
-def carregar_dados():
+def carregar_dados(uploaded_file=None):
     """Carrega e processa os dados da planilha"""
-    df = pd.read_csv('planilha_dados.csv')
+    # Tentar carregar de diferentes formas
+    if uploaded_file is not None:
+        df = pd.read_csv(uploaded_file)
+    elif os.path.exists('planilha_dados.csv'):
+        df = pd.read_csv('planilha_dados.csv')
+    elif os.path.exists('../planilha_dados.csv'):
+        df = pd.read_csv('../planilha_dados.csv')
+    elif os.path.exists('./deploy_streamlit/planilha_dados.csv'):
+        df = pd.read_csv('./deploy_streamlit/planilha_dados.csv')
+    else:
+        raise FileNotFoundError("Arquivo planilha_dados.csv não encontrado")
     
     # Converter Data para datetime
     df['Data'] = pd.to_datetime(df['Data'], format='%d/%m/%Y', errors='coerce')
@@ -89,9 +100,41 @@ def carregar_dados():
     
     return df_sem_guia
 
+# Verificar se o arquivo existe, senão solicitar upload
+uploaded_file = None
+arquivo_existe = os.path.exists('planilha_dados.csv') or os.path.exists('../planilha_dados.csv')
+
+if not arquivo_existe:
+    st.warning("⚠️ Arquivo 'planilha_dados.csv' não encontrado no repositório!")
+    st.info("""
+    **Por favor, faça upload do arquivo CSV com os dados:**
+    
+    O arquivo deve conter as seguintes colunas:
+    - Data, Tipo do Serviço, Guia, Serviço, Voo, Horário de Voo, Adt, Chd, Código
+    """)
+    
+    uploaded_file = st.file_uploader("Escolha o arquivo planilha_dados.csv", type=['csv'])
+    
+    if uploaded_file is None:
+        st.error("❌ Por favor, faça upload do arquivo para continuar.")
+        st.stop()
+
 # Carregar dados
-with st.spinner('Carregando dados...'):
-    df = carregar_dados()
+try:
+    with st.spinner('Carregando dados...'):
+        df = carregar_dados(uploaded_file)
+except FileNotFoundError as e:
+    st.error(f"❌ Erro: {str(e)}")
+    st.info("""
+    **Solução:**
+    1. Certifique-se de que o arquivo 'planilha_dados.csv' está no repositório GitHub
+    2. Ou faça upload do arquivo usando o botão acima
+    3. Verifique se o arquivo está na mesma pasta que o painel_recepcao_aeroporto.py
+    """)
+    st.stop()
+except Exception as e:
+    st.error(f"❌ Erro ao carregar dados: {str(e)}")
+    st.stop()
 
 # Filtros na sidebar
 st.sidebar.header("📊 Filtros")
