@@ -4,7 +4,6 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import numpy as np
-import os
 import gspread
 from google.oauth2.service_account import Credentials
 
@@ -15,70 +14,26 @@ st.title("✈️ Análise de Recepção no Aeroporto - Clientes sem Guia")
 st.markdown("---")
 
 @st.cache_data(ttl=600)  # Cache por 10 minutos
-def carregar_dados_google_sheets():
+def carregar_dados():
     """Carrega dados diretamente do Google Sheets"""
-    try:
-        # Tentar carregar credenciais do Streamlit Secrets (para deploy)
-        if "gcp_service_account" in st.secrets:
-            credentials_dict = dict(st.secrets["gcp_service_account"])
-        else:
-            # Tentar carregar do arquivo local (para desenvolvimento)
-            import json
-            if os.path.exists('bustling-day-459711-q8-ad487cab5866.json'):
-                with open('bustling-day-459711-q8-ad487cab5866.json') as f:
-                    credentials_dict = json.load(f)
-            else:
-                return None
-        
-        # Configurar credenciais
-        scopes = [
-            'https://www.googleapis.com/auth/spreadsheets.readonly',
-            'https://www.googleapis.com/auth/drive.readonly'
-        ]
-        credentials = Credentials.from_service_account_info(credentials_dict, scopes=scopes)
-        client = gspread.authorize(credentials)
-        
-        # Abrir a planilha (você precisa fornecer o ID ou nome da planilha)
-        # Tente primeiro pelo ID no secrets, senão usa o nome padrão
-        if "spreadsheet_id" in st.secrets:
-            spreadsheet = client.open_by_key(st.secrets["spreadsheet_id"])
-        else:
-            # Coloque aqui o nome da sua planilha do Google Sheets
-            spreadsheet = client.open("planilha_dados")  # ALTERE PARA O NOME DA SUA PLANILHA
-        
-        # Pegar a primeira aba ou uma aba específica
-        worksheet = spreadsheet.sheet1  # ou spreadsheet.worksheet("Nome da Aba")
-        
-        # Converter para DataFrame
-        data = worksheet.get_all_records()
-        df = pd.DataFrame(data)
-        
-        return df
-        
-    except Exception as e:
-        st.error(f"❌ Erro ao conectar ao Google Sheets: {str(e)}")
-        return None
-
-@st.cache_data
-def carregar_dados_csv(uploaded_file=None):
-    """Carrega dados de um arquivo CSV (fallback)"""
-    # Tentar carregar de diferentes formas
-    if uploaded_file is not None:
-        df = pd.read_csv(uploaded_file)
-    elif os.path.exists('planilha_dados.csv'):
-        df = pd.read_csv('planilha_dados.csv')
-    elif os.path.exists('../planilha_dados.csv'):
-        df = pd.read_csv('../planilha_dados.csv')
-    elif os.path.exists('./deploy_streamlit/planilha_dados.csv'):
-        df = pd.read_csv('./deploy_streamlit/planilha_dados.csv')
-    else:
-        raise FileNotFoundError("Arquivo planilha_dados.csv não encontrado")
-    return df
-
-def processar_dados(df):
-    """Processa e filtra os dados"""
-def processar_dados(df):
-    """Processa e filtra os dados"""
+    # Configurar credenciais
+    credentials_dict = dict(st.secrets["gcp_service_account"])
+    
+    scopes = [
+        'https://www.googleapis.com/auth/spreadsheets.readonly',
+        'https://www.googleapis.com/auth/drive.readonly'
+    ]
+    credentials = Credentials.from_service_account_info(credentials_dict, scopes=scopes)
+    client = gspread.authorize(credentials)
+    
+    # Abrir a planilha pelo ID
+    spreadsheet = client.open_by_key(st.secrets["spreadsheet_id"])
+    worksheet = spreadsheet.sheet1
+    
+    # Converter para DataFrame
+    data = worksheet.get_all_records()
+    df = pd.DataFrame(data)
+    
     # Converter Data para datetime
     df['Data'] = pd.to_datetime(df['Data'], format='%d/%m/%Y', errors='coerce')
     
@@ -123,7 +78,6 @@ def processar_dados(df):
         try:
             if pd.isna(horario) or horario == '' or horario == '-':
                 return None
-            # Tentar extrair hora (primeiros 2 dígitos ou primeiros caracteres antes de :)
             if ':' in str(horario):
                 hora = int(str(horario).split(':')[0])
                 return hora
@@ -152,79 +106,9 @@ def processar_dados(df):
     
     return df_sem_guia
 
-# Tentar carregar dados do Google Sheets primeiro
-with st.spinner('🔄 Conectando ao Google Sheets...'):
-    df_raw = carregar_dados_google_sheets()
-
-# Se falhou, solicitar upload de CSV
-if df_raw is None:
-    st.warning("⚠️ Não foi possível conectar ao Google Sheets")
-    st.info("""
-    **Opções:**
-    1. Faça upload do arquivo CSV manualmente
-    2. Configure as credenciais do Google Sheets (veja instruções abaixo)
-    
-    O arquivo deve conter as seguintes colunas:
-    - Data, Tipo do Serviço, Guia, Serviço, Voo, Horário de Voo, Adt, Chd, Código
-    """)
-    
-    uploaded_file = st.file_uploader("Escolha o arquivo planilha_dados.csv", type=['csv'])
-    
-    if uploaded_file is None:
-        with st.expander("📖 Como configurar Google Sheets"):
-            st.markdown("""
-            ### Configuração para Google Sheets
-            
-            1. **Copie o arquivo de credenciais** `bustling-day-459711-q8-ad487cab5866.json` para a pasta do projeto
-            
-            2. **No Streamlit Cloud**, adicione as credenciais em **Secrets**:
-               - Vá em "Manage app" > "Settings" > "Secrets"
-               - Cole o conteúdo do JSON assim:
-               
-            ```toml
-            [gcp_service_account]
-            type = "service_account"
-            project_id = "bustling-day-459711-q8"
-            private_key_id = "ad487cab586631f9fb6c685251e63e927fdf1754"
-            private_key = "-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----\\n"
-            client_email = "analista-nat-luckreceptivo-702@bustling-day-459711-q8.iam.gserviceaccount.com"
-            client_id = "114188369553621118271"
-            auth_uri = "https://accounts.google.com/o/oauth2/auth"
-            token_uri = "https://oauth2.googleapis.com/token"
-            auth_provider_x509_cert_url = "https://www.googleapis.com/oauth2/v1/certs"
-            client_x509_cert_url = "https://www.googleapis.com/robot/v1/metadata/x509/analista-nat-luckreceptivo-702%40bustling-day-459711-q8.iam.gserviceaccount.com"
-            universe_domain = "googleapis.com"
-            
-            spreadsheet_id = "SEU_ID_DA_PLANILHA_AQUI"
-            ```
-            
-            3. **Compartilhe a planilha** com o e-mail da service account:
-               `analista-nat-luckreceptivo-702@bustling-day-459711-q8.iam.gserviceaccount.com`
-            """)
-        
-        st.error("❌ Por favor, faça upload do arquivo CSV ou configure o Google Sheets.")
-        st.stop()
-    
-    # Carregar do CSV
-    try:
-        df_raw = carregar_dados_csv(uploaded_file)
-    except Exception as e:
-        st.error(f"❌ Erro ao carregar CSV: {str(e)}")
-        st.stop()
-else:
-    st.success("✅ Conectado ao Google Sheets com sucesso!")
-
-# Processar dados
-try:
-    with st.spinner('Processando dados...'):
-        df = processar_dados(df_raw)
-except Exception as e:
-    st.error(f"❌ Erro ao processar dados: {str(e)}")
-    st.info("""
-    **Verifique se a planilha tem todas as colunas necessárias:**
-    - Data, Tipo do Serviço, Guia, Serviço, Voo, Horário de Voo, Adt, Chd, Código
-    """)
-    st.stop()
+# Carregar dados
+with st.spinner('🔄 Carregando dados do Google Sheets...'):
+    df = carregar_dados()
 
 # Filtros na sidebar
 st.sidebar.header("📊 Filtros")
@@ -655,48 +539,6 @@ with col2:
         
         📊 **Cobertura:** ~90% dos passageiros
         """)
-
-st.markdown("---")
-
-# Exportar dados
-st.subheader("📥 Exportar Dados")
-
-col1, col2, col3 = st.columns(3)
-
-with col1:
-    # Exportar resumo por dia
-    if st.button("📊 Exportar Resumo por Dia"):
-        concentracao_dia_export = concentracao_dia[['Dia_Semana', 'Total_Passageiros', 'Qtd_Servicos', 'Qtd_Voos']]
-        csv = concentracao_dia_export.to_csv(index=False, encoding='utf-8-sig')
-        st.download_button(
-            label="⬇️ Download CSV",
-            data=csv,
-            file_name=f"resumo_por_dia_{ano_selecionado}_{mes_selecionado:02d}.csv",
-            mime="text/csv"
-        )
-
-with col2:
-    # Exportar resumo por horário
-    if st.button("📊 Exportar Resumo por Horário"):
-        csv = concentracao_hora.to_csv(index=False, encoding='utf-8-sig')
-        st.download_button(
-            label="⬇️ Download CSV",
-            data=csv,
-            file_name=f"resumo_por_horario_{ano_selecionado}_{mes_selecionado:02d}.csv",
-            mime="text/csv"
-        )
-
-with col3:
-    # Exportar dados completos
-    if st.button("📊 Exportar Dados Completos"):
-        df_export = df_filtrado[['Data', 'Dia_Semana_PT', 'Hora_Voo', 'Voo', 'Código', 'Serviço', 'Cliente', 'Adt', 'Chd', 'Total_Pax']]
-        csv = df_export.to_csv(index=False, encoding='utf-8-sig')
-        st.download_button(
-            label="⬇️ Download CSV",
-            data=csv,
-            file_name=f"dados_completos_{ano_selecionado}_{mes_selecionado:02d}.csv",
-            mime="text/csv"
-        )
 
 # Rodapé
 st.markdown("---")
