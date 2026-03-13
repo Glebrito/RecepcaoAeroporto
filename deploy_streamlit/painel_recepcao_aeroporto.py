@@ -5,6 +5,8 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import numpy as np
 import os
+import gspread
+from google.oauth2.service_account import Credentials
 
 st.set_page_config(page_title="Gestão Recepção Aeroporto", layout="wide", page_icon="✈️")
 
@@ -12,9 +14,54 @@ st.set_page_config(page_title="Gestão Recepção Aeroporto", layout="wide", pag
 st.title("✈️ Análise de Recepção no Aeroporto - Clientes sem Guia")
 st.markdown("---")
 
+@st.cache_data(ttl=600)  # Cache por 10 minutos
+def carregar_dados_google_sheets():
+    """Carrega dados diretamente do Google Sheets"""
+    try:
+        # Tentar carregar credenciais do Streamlit Secrets (para deploy)
+        if "gcp_service_account" in st.secrets:
+            credentials_dict = dict(st.secrets["gcp_service_account"])
+        else:
+            # Tentar carregar do arquivo local (para desenvolvimento)
+            import json
+            if os.path.exists('bustling-day-459711-q8-ad487cab5866.json'):
+                with open('bustling-day-459711-q8-ad487cab5866.json') as f:
+                    credentials_dict = json.load(f)
+            else:
+                return None
+        
+        # Configurar credenciais
+        scopes = [
+            'https://www.googleapis.com/auth/spreadsheets.readonly',
+            'https://www.googleapis.com/auth/drive.readonly'
+        ]
+        credentials = Credentials.from_service_account_info(credentials_dict, scopes=scopes)
+        client = gspread.authorize(credentials)
+        
+        # Abrir a planilha (você precisa fornecer o ID ou nome da planilha)
+        # Tente primeiro pelo ID no secrets, senão usa o nome padrão
+        if "spreadsheet_id" in st.secrets:
+            spreadsheet = client.open_by_key(st.secrets["spreadsheet_id"])
+        else:
+            # Coloque aqui o nome da sua planilha do Google Sheets
+            spreadsheet = client.open("planilha_dados")  # ALTERE PARA O NOME DA SUA PLANILHA
+        
+        # Pegar a primeira aba ou uma aba específica
+        worksheet = spreadsheet.sheet1  # ou spreadsheet.worksheet("Nome da Aba")
+        
+        # Converter para DataFrame
+        data = worksheet.get_all_records()
+        df = pd.DataFrame(data)
+        
+        return df
+        
+    except Exception as e:
+        st.error(f"❌ Erro ao conectar ao Google Sheets: {str(e)}")
+        return None
+
 @st.cache_data
-def carregar_dados(uploaded_file=None):
-    """Carrega e processa os dados da planilha"""
+def carregar_dados_csv(uploaded_file=None):
+    """Carrega dados de um arquivo CSV (fallback)"""
     # Tentar carregar de diferentes formas
     if uploaded_file is not None:
         df = pd.read_csv(uploaded_file)
@@ -26,7 +73,12 @@ def carregar_dados(uploaded_file=None):
         df = pd.read_csv('./deploy_streamlit/planilha_dados.csv')
     else:
         raise FileNotFoundError("Arquivo planilha_dados.csv não encontrado")
-    
+    return df
+
+def processar_dados(df):
+    """Processa e filtra os dados"""
+def processar_dados(df):
+    """Processa e filtra os dados"""
     # Converter Data para datetime
     df['Data'] = pd.to_datetime(df['Data'], format='%d/%m/%Y', errors='coerce')
     
@@ -100,14 +152,17 @@ def carregar_dados(uploaded_file=None):
     
     return df_sem_guia
 
-# Verificar se o arquivo existe, senão solicitar upload
-uploaded_file = None
-arquivo_existe = os.path.exists('planilha_dados.csv') or os.path.exists('../planilha_dados.csv')
+# Tentar carregar dados do Google Sheets primeiro
+with st.spinner('🔄 Conectando ao Google Sheets...'):
+    df_raw = carregar_dados_google_sheets()
 
-if not arquivo_existe:
-    st.warning("⚠️ Arquivo 'planilha_dados.csv' não encontrado no repositório!")
+# Se falhou, solicitar upload de CSV
+if df_raw is None:
+    st.warning("⚠️ Não foi possível conectar ao Google Sheets")
     st.info("""
-    **Por favor, faça upload do arquivo CSV com os dados:**
+    **Opções:**
+    1. Faça upload do arquivo CSV manualmente
+    2. Configure as credenciais do Google Sheets (veja instruções abaixo)
     
     O arquivo deve conter as seguintes colunas:
     - Data, Tipo do Serviço, Guia, Serviço, Voo, Horário de Voo, Adt, Chd, Código
@@ -116,24 +171,59 @@ if not arquivo_existe:
     uploaded_file = st.file_uploader("Escolha o arquivo planilha_dados.csv", type=['csv'])
     
     if uploaded_file is None:
-        st.error("❌ Por favor, faça upload do arquivo para continuar.")
+        with st.expander("📖 Como configurar Google Sheets"):
+            st.markdown("""
+            ### Configuração para Google Sheets
+            
+            1. **Copie o arquivo de credenciais** `bustling-day-459711-q8-ad487cab5866.json` para a pasta do projeto
+            
+            2. **No Streamlit Cloud**, adicione as credenciais em **Secrets**:
+               - Vá em "Manage app" > "Settings" > "Secrets"
+               - Cole o conteúdo do JSON assim:
+               
+            ```toml
+            [gcp_service_account]
+            type = "service_account"
+            project_id = "bustling-day-459711-q8"
+            private_key_id = "ad487cab586631f9fb6c685251e63e927fdf1754"
+            private_key = "-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----\\n"
+            client_email = "analista-nat-luckreceptivo-702@bustling-day-459711-q8.iam.gserviceaccount.com"
+            client_id = "114188369553621118271"
+            auth_uri = "https://accounts.google.com/o/oauth2/auth"
+            token_uri = "https://oauth2.googleapis.com/token"
+            auth_provider_x509_cert_url = "https://www.googleapis.com/oauth2/v1/certs"
+            client_x509_cert_url = "https://www.googleapis.com/robot/v1/metadata/x509/analista-nat-luckreceptivo-702%40bustling-day-459711-q8.iam.gserviceaccount.com"
+            universe_domain = "googleapis.com"
+            
+            spreadsheet_id = "SEU_ID_DA_PLANILHA_AQUI"
+            ```
+            
+            3. **Compartilhe a planilha** com o e-mail da service account:
+               `analista-nat-luckreceptivo-702@bustling-day-459711-q8.iam.gserviceaccount.com`
+            """)
+        
+        st.error("❌ Por favor, faça upload do arquivo CSV ou configure o Google Sheets.")
         st.stop()
+    
+    # Carregar do CSV
+    try:
+        df_raw = carregar_dados_csv(uploaded_file)
+    except Exception as e:
+        st.error(f"❌ Erro ao carregar CSV: {str(e)}")
+        st.stop()
+else:
+    st.success("✅ Conectado ao Google Sheets com sucesso!")
 
-# Carregar dados
+# Processar dados
 try:
-    with st.spinner('Carregando dados...'):
-        df = carregar_dados(uploaded_file)
-except FileNotFoundError as e:
-    st.error(f"❌ Erro: {str(e)}")
-    st.info("""
-    **Solução:**
-    1. Certifique-se de que o arquivo 'planilha_dados.csv' está no repositório GitHub
-    2. Ou faça upload do arquivo usando o botão acima
-    3. Verifique se o arquivo está na mesma pasta que o painel_recepcao_aeroporto.py
-    """)
-    st.stop()
+    with st.spinner('Processando dados...'):
+        df = processar_dados(df_raw)
 except Exception as e:
-    st.error(f"❌ Erro ao carregar dados: {str(e)}")
+    st.error(f"❌ Erro ao processar dados: {str(e)}")
+    st.info("""
+    **Verifique se a planilha tem todas as colunas necessárias:**
+    - Data, Tipo do Serviço, Guia, Serviço, Voo, Horário de Voo, Adt, Chd, Código
+    """)
     st.stop()
 
 # Filtros na sidebar
